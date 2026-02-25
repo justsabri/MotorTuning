@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "params": [
+    {
+      "key": "position",
+      "name": "当前位置",
+      "default": 0,
+      "unit": "°",
+      "editable": true,
+      "min": 0,
+      "max": 180
+    },
+    {
+      "key": "min_pos",
+      "name": "最小位置",
+      "default": 0,
+      "unit": "°",
+      "editable": true,
+      "min": 0,
+      "max": 180
+    },
+    {
+      "key": "max_pos",
+      "name": "最大位置",
+      "default": 180,
+      "unit": "°",
+      "editable": true,
+      "min": 0,
+      "max": 360
+    },
+    {
+      "key": "speed",
+      "name": "转动速度",
+      "default": 50,
+      "unit": "%",
+      "editable": true,
+      "min": 1,
+      "max": 100
+    }
+  ]
+}
