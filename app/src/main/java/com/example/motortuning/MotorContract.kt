@@ -1,7 +1,5 @@
 package com.example.motortuning
 
-import android.bluetooth.BluetoothDevice
-
 // 电机 UI 状态
 data class MotorUiState(
     val position: Int = 0,
@@ -35,13 +33,5 @@ data class MotorParam(
     val max: Int? = null
 )
 
-sealed interface BluetoothState {
-    object Idle : BluetoothState
-    object Scanning : BluetoothState
-    data class Connecting(val device: BluetoothDevice) : BluetoothState
-    data class Connected(val device: BluetoothDevice) : BluetoothState
-    data class Reconnecting(val retry: Int) : BluetoothState
-    object Disconnected : BluetoothState
-}
 
 

@@ -23,8 +23,8 @@ class BluetoothLeViewModel(
     private val context: Context
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow<BluetoothState>(BluetoothState.Disconnected)
-    val state: StateFlow<BluetoothState> = _state
+    private val _state = MutableStateFlow<ClassicBluetoothState>(ClassicBluetoothState.Disconnected)
+    val state: StateFlow<ClassicBluetoothState> = _state
 
     private val _devices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
     val devices: StateFlow<List<BluetoothDevice>> = _devices
@@ -78,7 +78,7 @@ class BluetoothLeViewModel(
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
         stopScan()
-        _state.value = BluetoothState.Connecting(device)
+        _state.value = ClassicBluetoothState.Connecting(device)
 
         gatt?.close() // 关闭旧连接
         gatt = device.connectGatt(context, false, gattCallback)
@@ -90,12 +90,12 @@ class BluetoothLeViewModel(
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 viewModelScope.launch {
-                    _state.value = BluetoothState.Connected(gatt.device)
+                    _state.value = ClassicBluetoothState.Connected(gatt.device)
                     gatt.discoverServices()
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 viewModelScope.launch {
-                    _state.value = BluetoothState.Disconnected
+                    _state.value = ClassicBluetoothState.Disconnected
                     _uiEvent.emit(BluetoothUiEvent.ShowError("连接断开"))
                 }
             }
@@ -115,7 +115,7 @@ class BluetoothLeViewModel(
     fun disconnect() {
         gatt?.close()
         gatt = null
-        _state.value = BluetoothState.Disconnected
+        _state.value = ClassicBluetoothState.Disconnected
     }
 
     override fun onCleared() {

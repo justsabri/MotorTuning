@@ -25,8 +25,8 @@ class BluetoothViewModel(
     private val context: Context
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow<BluetoothState>(BluetoothState.Idle)
-    val state: StateFlow<BluetoothState> = _state
+    private val _state = MutableStateFlow<ClassicBluetoothState>(ClassicBluetoothState.Idle)
+    val state: StateFlow<ClassicBluetoothState> = _state
 
     private var reconnectJob: Job? = null
 
@@ -65,14 +65,14 @@ class BluetoothViewModel(
     /** 连接设备 */
     fun connect(device: BluetoothDevice) {
         currentDevice = device
-        _state.value = BluetoothState.Connecting(device)
+        _state.value = ClassicBluetoothState.Connecting(device)
 
         viewModelScope.launch {
             val success = connectInternal(device)
             if (success) {
-                _state.value = BluetoothState.Connected(device)
+                _state.value = ClassicBluetoothState.Connected(device)
             } else {
-                _state.value = BluetoothState.Disconnected
+                _state.value = ClassicBluetoothState.Disconnected
 
                 // 👇 关键：通知 UI
                 @SuppressLint("MissingPermission")
@@ -119,11 +119,11 @@ class BluetoothViewModel(
         reconnectJob?.cancel()
         reconnectJob = viewModelScope.launch {
             repeat(5) { retry ->
-                _state.value = BluetoothState.Reconnecting(retry + 1)
+                _state.value = ClassicBluetoothState.Reconnecting(retry + 1)
                 delay(2000)
                 if (tryReconnect()) return@launch
             }
-            _state.value = BluetoothState.Disconnected
+            _state.value = ClassicBluetoothState.Disconnected
         }
     }
 
@@ -132,7 +132,7 @@ class BluetoothViewModel(
 
         val ok = connectInternal(device)
         if (ok) {
-            _state.value = BluetoothState.Connected(device)
+            _state.value = ClassicBluetoothState.Connected(device)
         }
         return ok
     }
@@ -149,13 +149,13 @@ class BluetoothViewModel(
             input = null
             output = null
             _connectedDevice.value = null
-            _state.value = BluetoothState.Disconnected
+            _state.value = ClassicBluetoothState.Disconnected
         }
     }
 
     fun disconnectByUser() {
         currentDevice = null
-        _state.value = BluetoothState.Disconnected
+        _state.value = ClassicBluetoothState.Disconnected
     }
 
     /** 循环读取 ESP32 数据 */

@@ -25,7 +25,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -43,17 +42,8 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun MotorControlScreen(
     viewModel: MotorViewModel,
-    bluetoothViewModel: BluetoothViewModel,
     modifier: Modifier = Modifier
 ) {
-    val btState by bluetoothViewModel.state.collectAsState()
-
-    LaunchedEffect(btState) {
-        if (btState is BluetoothState.Disconnected) {
-            // 什么都不用写，MainActivity 已经处理跳转
-        }
-    }
-
     MotorControlContent(
         viewModel = viewModel,
         modifier = modifier

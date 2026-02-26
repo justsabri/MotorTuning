@@ -35,8 +35,8 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val context = LocalContext.current
 
-                val btViewModel: BluetoothViewModel = viewModel(
-                    factory = BluetoothViewModelFactory(context)
+                val btViewModel: DualBluetoothViewModel = viewModel(
+                    factory = DualBluetoothViewModelFactory(context)
                 )
 
                 // SnackbarHostState 放在 Scaffold 层
@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
                         composable("bluetooth") {
                             BluetoothScreen(
                                 viewModel = btViewModel,
+                                activity = this@MainActivity,
                                 navController = navController,       // 传递 NavController，如果需要
                                 snackbarHostState = snackbarHostState // 传递 SnackbarHostState
                             )
@@ -60,7 +61,6 @@ class MainActivity : ComponentActivity() {
                         composable("motor") {
                             MotorControlScreen(
                                 viewModel = viewModel(),
-                                bluetoothViewModel = btViewModel,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
