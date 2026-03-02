@@ -7,24 +7,45 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class DualBluetoothViewModel(
     private val context: Context
-) : ViewModel() {
+) : ViewModel(), MotorComm {
 
-    private val classic = ClassicBluetoothManager(context)
-    private val ble = BleBluetoothManager(context)
+    private val classic: BaseBluetoothManager  = ClassicBluetoothManager(context)
+    private val ble: BaseBluetoothManager  = BleBluetoothManager(context)
 
     private val _devices = MutableStateFlow<List<BtDevice>>(emptyList())
     val devices: StateFlow<List<BtDevice>> = _devices
+
+    private var activeManager: BaseBluetoothManager? = null
 
     private val _state = MutableStateFlow<BluetoothState>(BluetoothState.Idle)
     val state: StateFlow<BluetoothState> = _state
 
     private val _uiEvent = MutableSharedFlow<BluetoothUiEvent>()
     val uiEvent: SharedFlow<BluetoothUiEvent> = _uiEvent
+
+    override val connected: StateFlow<Boolean> =
+        state.map { it is BluetoothState.Connected }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    private val dataListeners =
+        mutableSetOf<(ByteArray) -> Unit>()
+
+//    init {
+//        classic.onDataReceived = { data ->
+//            dataListeners.forEach { it(data) }
+//        }
+//
+//        ble.onDataReceived = { data ->
+//            dataListeners.forEach { it(data) }
+//        }
+//    }
 
     fun scanDevicesSafe() {
         _state.value = BluetoothState.Scanning
@@ -60,6 +81,11 @@ class DualBluetoothViewModel(
 
             if (success) {
                 _state.value = BluetoothState.Connected(device)
+                activeManager =
+                    if (device is BtDevice.Classic) classic else ble
+                activeManager?.listenForDataUpdates { data ->
+                    dataListeners.forEach { it(data) }
+                }
             } else {
                 _state.value = BluetoothState.Disconnected
                 _uiEvent.emit(
@@ -76,6 +102,21 @@ class DualBluetoothViewModel(
         ble.disconnect()
         _state.value = BluetoothState.Disconnected
     }
+
+    /** 发送数据 */
+    override fun send(data: ByteArray) {
+        activeManager?.send(data)
+    }
+
+    override fun listenForDataUpdates(
+        onDataReceived: (ByteArray) -> Unit
+    ):() -> Unit {
+        dataListeners += onDataReceived
+        return {
+            dataListeners -= onDataReceived
+        }
+    }
+
 }
 
 class DualBluetoothViewModelFactory(

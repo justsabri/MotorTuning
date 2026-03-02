@@ -8,7 +8,9 @@
       "unit": "°",
       "editable": true,
       "min": 0,
-      "max": 180
+      "max": 180,
+      "paramId": "0x01",
+      "length": 2,
     },
     {
       "key": "min_pos",
@@ -17,7 +19,9 @@
       "unit": "°",
       "editable": true,
       "min": 0,
-      "max": 180
+      "max": 180,
+      "paramId": "0x02",
+      "length": 2
     },
     {
       "key": "max_pos",
@@ -26,7 +30,9 @@
       "unit": "°",
       "editable": true,
       "min": 0,
-      "max": 360
+      "max": 360,
+      "paramId": "0x03",
+      "length": 2
     },
     {
       "key": "speed",
@@ -35,7 +41,9 @@
       "unit": "%",
       "editable": true,
       "min": 1,
-      "max": 100
+      "max": 100,
+      "paramId": "0x04",
+      "length": 2
     }
   ]
 }

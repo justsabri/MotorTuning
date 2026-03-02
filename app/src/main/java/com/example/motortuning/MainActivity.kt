@@ -39,6 +39,13 @@ class MainActivity : ComponentActivity() {
                     factory = DualBluetoothViewModelFactory(context)
                 )
 
+                val motorViewModel: MotorViewModel by viewModels {
+                    MotorViewModelFactory(
+                        application = application,
+                        comm = btViewModel   // DualBluetoothViewModel 实现了 MotorComm
+                    )
+                }
+
                 // SnackbarHostState 放在 Scaffold 层
                 val snackbarHostState = remember { SnackbarHostState() }
 
@@ -60,7 +67,7 @@ class MainActivity : ComponentActivity() {
                         }
                         composable("motor") {
                             MotorControlScreen(
-                                viewModel = viewModel(),
+                                viewModel = motorViewModel,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }

@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -19,11 +21,15 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 class MotorViewModel(
-    application: Application
+    application: Application,
+    private val comm: MotorComm
 ) : AndroidViewModel(application) {
 
     private val context = application.applicationContext
     private val gson = Gson()
+    
+    // 发送数据的回调函数，由外部设置
+    var onSendData: ((ByteArray) -> Unit)? = null
 
     /** ================= 参数定义（来自 JSON） ================= */
     private val _paramDef = MutableStateFlow<List<MotorParam>>(emptyList())
@@ -41,10 +47,16 @@ class MotorViewModel(
     private val _uiState = MutableStateFlow(MotorUiState())
     val uiState: StateFlow<MotorUiState> = _uiState
 
+    private var removeListener: (() -> Unit)? = null
+
     init {
         loadAndMergeParams()
 
         initPosition()
+
+        removeListener = comm.listenForDataUpdates { data ->
+            processBluetoothData(data)
+        }
     }
 
     /** ==================== 主加载函数 ==================== **/
@@ -53,6 +65,10 @@ class MotorViewModel(
         val merged = mergeParams(config)
         _paramDef.value = config.params
         _params.value = merged
+    }
+
+    override fun onCleared() {
+        removeListener?.invoke()
     }
 
     /** ==================== 1️⃣ 加载 JSON 文件 ==================== **/
@@ -150,9 +166,142 @@ class MotorViewModel(
         }
     }
 
+    /** 发送参数 */
     private fun sendParams(params: Map<String, Int>) {
+        // 构建发送数据
+        val data = buildSendData(params)
+        // 通过回调发送数据
+        comm.send(data)
+    }
+
+    /** 构建发送数据 */
+    private fun buildSendData(params: Map<String, Int>): ByteArray {
+        // 构建蓝牙数据，格式：Byte0: CMD=0x11, Byte1..: TLV blocks
+        val dataList = mutableListOf<Byte>()
+        // 添加 CMD=0x11 (SET_MULTI)
+        dataList.add(0x11.toByte())
+        
+        // 添加 TLV blocks
         params.forEach { (key, value) ->
-            updateRealtimeValue(key, value)
+            // 从 _paramDef 中查找对应的 MotorParam 对象
+            val motorParam = _paramDef.value.find { it.key == key }
+            if (motorParam != null) {
+                // 解析 paramId 字符串（十六进制值，例如 "0x01"）
+                val paramId = motorParam.paramId.let {
+                    if (it.startsWith("0x", ignoreCase = true)) {
+                        it.substring(2).toIntOrNull(16) ?: 0
+                    } else {
+                        it.toIntOrNull() ?: 0
+                    }
+                }
+                // 使用 MotorParam 中的 length 字段
+                val length = motorParam.length
+                
+                // 添加 paramId
+                dataList.add(paramId.toByte())
+                // 添加 length
+                dataList.add(length.toByte())
+                
+                // 根据 length 添加 value 的字节表示（小端序）
+                when (length) {
+                    1 -> dataList.add((value and 0xFF).toByte())
+                    2 -> {
+                        dataList.add((value and 0xFF).toByte())
+                        dataList.add((value shr 8 and 0xFF).toByte())
+                    }
+                    4 -> {
+                        dataList.add((value and 0xFF).toByte())
+                        dataList.add((value shr 8 and 0xFF).toByte())
+                        dataList.add((value shr 16 and 0xFF).toByte())
+                        dataList.add((value shr 24 and 0xFF).toByte())
+                    }
+                    8 -> {
+                        // 发送 8 字节长度的值（小端序）
+                        dataList.add((value and 0xFF).toByte())
+                        dataList.add((value shr 8 and 0xFF).toByte())
+                        dataList.add((value shr 16 and 0xFF).toByte())
+                        dataList.add((value shr 24 and 0xFF).toByte())
+                        dataList.add((value shr 32 and 0xFF).toByte())
+                        dataList.add((value shr 40 and 0xFF).toByte())
+                        dataList.add((value shr 48 and 0xFF).toByte())
+                        dataList.add((value shr 56 and 0xFF).toByte())
+                    }
+                    // 其他长度可以根据需要添加
+                }
+            }
+        }
+        
+        return dataList.toByteArray()
+    }
+
+    /** 处理接收到的蓝牙数据 */
+    fun processBluetoothData(data: ByteArray) {
+        // 处理接收到的蓝牙数据，按照 TLV 协议解析
+        if (data.isNotEmpty()) {
+            val cmd = data[0] // 第一个字节是 CMD
+            
+            // 跳过 CMD，开始解析 TLV blocks
+            var offset = 1
+            while (offset < data.size) {
+                // 确保有足够的字节读取 TLV block 的头部
+                if (offset + 2 <= data.size) {
+                    val paramId = data[offset].toInt() and 0xFF
+                    val length = data[offset + 1].toInt() and 0xFF
+                    
+                    // 确保有足够的字节读取 value
+                    if (offset + 2 + length <= data.size) {
+                        // 根据 length 解析 value
+                        val value = when (length) {
+                            1 -> data[offset + 2].toInt() and 0xFF
+                            2 -> {
+                                (data[offset + 2].toInt() and 0xFF) or
+                                ((data[offset + 3].toInt() and 0xFF) shl 8)
+                            }
+                            4 -> {
+                                (data[offset + 2].toInt() and 0xFF) or
+                                ((data[offset + 3].toInt() and 0xFF) shl 8) or
+                                ((data[offset + 4].toInt() and 0xFF) shl 16) or
+                                ((data[offset + 5].toInt() and 0xFF) shl 24)
+                            }
+                            8 -> {
+                                // 8 字节长度的值，这里只取低 32 位
+                                (data[offset + 2].toInt() and 0xFF) or
+                                ((data[offset + 3].toInt() and 0xFF) shl 8) or
+                                ((data[offset + 4].toInt() and 0xFF) shl 16) or
+                                ((data[offset + 5].toInt() and 0xFF) shl 24)
+                            }
+                            else -> 0
+                        }
+                        
+                        // 根据 paramId 查找对应的 key
+                        val motorParam = _paramDef.value.find { param ->
+                            // 解析 paramId 字符串
+                            val id = param.paramId.let {
+                                if (it.startsWith("0x", ignoreCase = true)) {
+                                    it.substring(2).toIntOrNull(16) ?: 0
+                                } else {
+                                    it.toIntOrNull() ?: 0
+                                }
+                            }
+                            id == paramId
+                        }
+                        
+                        // 更新实时值
+                        motorParam?.key?.let {
+                            updateRealtimeValue(it, value)
+                        }
+                        
+                        // 移动到下一个 TLV block
+                        offset += 2 + length
+                    } else {
+                        // 数据不完整，退出循环
+                        break
+                    }
+                } else {
+                    // 数据不完整，退出循环
+                    break
+                }
+            }
         }
     }
 
@@ -160,14 +309,14 @@ class MotorViewModel(
         try {
             val file = File(context.filesDir, "motor_params.json")
 
-            // 构建可序列化的列表
+            // 更新可序列化的列表
             val paramList = _paramDef.value.map { param ->
-                MotorParam(
-                    key = param.key,
-                    name = param.name,
-                    default = newParams[param.key] ?: param.default,
-                    unit = param.unit
-                )
+                val newValue = newParams[param.key]
+                if (newValue != null) {
+                    param.copy(default = newValue)
+                } else {
+                    param
+                }
             }
 
             val json = Gson().toJson(paramList)
@@ -236,5 +385,19 @@ class MotorViewModel(
             }
             else -> Unit
         }
+    }
+}
+
+class MotorViewModelFactory(
+    private val application: Application,
+    private val comm: MotorComm
+) : ViewModelProvider.Factory {
+
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(MotorViewModel::class.java)) {
+            return MotorViewModel(application, comm) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
     }
 }

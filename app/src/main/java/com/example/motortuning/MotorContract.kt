@@ -1,5 +1,21 @@
 package com.example.motortuning
 
+import kotlinx.coroutines.flow.StateFlow
+
+interface MotorComm {
+
+    /** 是否已连接 */
+    val connected: StateFlow<Boolean>
+
+    /** 监听来自设备的数据 */
+    fun listenForDataUpdates(
+        onDataReceived: (ByteArray) -> Unit
+    ): () -> Unit
+
+    /** 发送数据到设备 */
+    fun send(data: ByteArray)
+}
+
 // 电机 UI 状态
 data class MotorUiState(
     val position: Int = 0,
@@ -30,7 +46,9 @@ data class MotorParam(
     val unit: String = "",
     val editable: Boolean = true,
     val min: Int? = null,
-    val max: Int? = null
+    val max: Int? = null,
+    val paramId: String,
+    val length: Int
 )
 
 

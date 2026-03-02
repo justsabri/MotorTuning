@@ -1,5 +1,6 @@
 package com.example.motortuning
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -15,8 +16,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresPermission
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.InputStream
@@ -26,23 +31,66 @@ import java.util.UUID
 sealed class BtDevice {
     abstract val name: String?
     abstract val address: String
+    abstract val type: BluetoothType  // 增加设备类型信息
 
     data class Classic(val device: BluetoothDevice) : BtDevice() {
         @SuppressLint("MissingPermission")
         override val name = device.name
         override val address = device.address
+        override val type = BluetoothType.Classic
     }
 
     data class Ble(val device: BluetoothDevice) : BtDevice() {
         @SuppressLint("MissingPermission")
         override val name = device.name
         override val address = device.address
+        override val type = BluetoothType.Ble
     }
+}
+
+enum class BluetoothType {
+    Classic, Ble
+}
+
+/** 蓝牙基类接口/抽象类 */
+abstract class BaseBluetoothManager {
+
+    /** 当前状态 */
+//    abstract val state: StateFlow<BluetoothState>
+
+    /** 扫描到的设备列表 */
+//    abstract val devices: StateFlow<List<BtDevice>>
+
+    /** UI 事件或错误事件 */
+//    abstract val uiEvent: SharedFlow<BluetoothUiEvent>
+
+    /** 开始扫描 */
+    abstract fun startScan(onDeviceFound: (BluetoothDevice) -> Unit)
+
+    /** 停止扫描 */
+    abstract fun stopScan()
+
+    /** 连接设备 */
+    abstract suspend fun connect(device: BluetoothDevice): Boolean
+
+    /** 断开连接 */
+    abstract fun disconnect()
+
+    /** 发送数据 */
+    abstract fun send(data: ByteArray): Int
+
+    /** 开启数据接收 */
+    abstract fun listenForDataUpdates(onDataReceived: (ByteArray) -> Unit)
+
+    /** 可选：接收数据 Flow */
+    abstract val receivedData: SharedFlow<ByteArray>
+
+    var onDataReceived: ((ByteArray) -> Unit)? = null
 }
 
 class ClassicBluetoothManager(
     private val context: Context
-) {
+)  : BaseBluetoothManager() {
 
     private val bluetoothManager =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -62,7 +110,7 @@ class ClassicBluetoothManager(
     /** ================= 扫描 ================= */
 
     @SuppressLint("MissingPermission")
-    fun startScan(onDeviceFound: (BluetoothDevice) -> Unit) {
+    override fun startScan(onDeviceFound: (BluetoothDevice) -> Unit) {
         if (!hasBluetoothPermission(context)) {
             Log.d("ClassicBT", "No bluetooth permission.")
             return
@@ -77,7 +125,11 @@ class ClassicBluetoothManager(
             override fun onReceive(ctx: Context, intent: Intent) {
                 if (BluetoothDevice.ACTION_FOUND == intent.action) {
                     val device: BluetoothDevice? =
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                        } else {
+                            TODO("VERSION.SDK_INT < TIRAMISU")
+                        }
                     device?.let {
                         Log.d("ClassicBT", "Found device: ${it.name} ${it.address}")
                         onDeviceFound(it)
@@ -102,7 +154,7 @@ class ClassicBluetoothManager(
     }
 
     @SuppressLint("MissingPermission")
-    fun stopScan() {
+    override fun stopScan() {
         try {
             receiver?.let {
                 context.unregisterReceiver(it)
@@ -115,7 +167,7 @@ class ClassicBluetoothManager(
 
     /** ================= 连接 ================= */
 
-    suspend fun connect(device: BluetoothDevice): Boolean =
+    override suspend fun connect(device: BluetoothDevice): Boolean =
         withContext(Dispatchers.IO) {
             try {
                 stopScan()
@@ -135,7 +187,7 @@ class ClassicBluetoothManager(
             }
         }
 
-    fun disconnect() {
+    override fun disconnect() {
         try {
             input?.close()
             output?.close()
@@ -148,20 +200,43 @@ class ClassicBluetoothManager(
     }
 
     /** ================= 发送 ================= */
-
-    fun send(data: ByteArray) {
+    override fun send(data: ByteArray): Int {
         try {
             output?.write(data)
             output?.flush()
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        return 0
+    }
+
+    override val receivedData: SharedFlow<ByteArray>
+        get() = TODO("Not yet implemented")
+
+    /** ================= 接收 ================= */
+    override fun listenForDataUpdates(onDataReceived: (ByteArray) -> Unit) {
+        Thread {
+            try {
+                val buffer = ByteArray(1024)
+                var bytes: Int
+
+                while (true) {
+                    bytes = input?.read(buffer) ?: -1
+                    if (bytes > 0) {
+                        val data = buffer.copyOf(bytes)
+                        onDataReceived(data)  // 处理接收到的数据
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }.start()
     }
 }
 
 class BleBluetoothManager(
     private val context: Context
-) {
+)  : BaseBluetoothManager() {
 
     private val adapter =
         (context.getSystemService(Context.BLUETOOTH_SERVICE)
@@ -178,6 +253,13 @@ class BleBluetoothManager(
         UUID.fromString("0000FFE1-0000-1000-8000-00805F9B34FB")
 
     private var writeChar: BluetoothGattCharacteristic? = null
+    
+    // 发送队列，避免数据丢失
+    private val dataQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+    private var isSending = false
+    
+    // 接收数据的 SharedFlow
+    private val _receivedData = kotlinx.coroutines.flow.MutableSharedFlow<ByteArray>()
 
     /** ================= 扫描 ================= */
 
@@ -200,41 +282,15 @@ class BleBluetoothManager(
 
     private var onDeviceFound: ((BluetoothDevice) -> Unit)? = null
 
-    private val gattCallback = object : BluetoothGattCallback() {
-
-        // 成功写入数据
-        override fun onCharacteristicWrite(
-            gatt: BluetoothGatt?,
-            characteristic: BluetoothGattCharacteristic?,
-            status: Int
-        ) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                // 写入成功，执行相关逻辑
-                Log.d("BLE", "Write successful!")
-            } else {
-                // 写入失败，执行错误处理
-                Log.e("BLE", "Write failed with status: $status")
-            }
-        }
-
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            value: ByteArray
-        ) {
-            super.onCharacteristicChanged(gatt, characteristic, value)
-        }
-    }
-
     @SuppressLint("MissingPermission")
-    fun startScan(onFound: (BluetoothDevice) -> Unit) {
+    override fun startScan(onDeviceFound: (BluetoothDevice) -> Unit) {
         Log.d("BLE", "Start scanning...")
-        onDeviceFound = onFound
+        this@BleBluetoothManager.onDeviceFound = onDeviceFound
         scanner.startScan(scanCallback)
     }
 
     @SuppressLint("MissingPermission")
-    fun stopScan() {
+    override fun stopScan() {
         scanner.stopScan(scanCallback)
         onDeviceFound = null
     }
@@ -242,7 +298,7 @@ class BleBluetoothManager(
     /** ================= 连接 ================= */
 
     @SuppressLint("MissingPermission")
-    suspend fun connect(device: BluetoothDevice): Boolean =
+    override suspend fun connect(device: BluetoothDevice): Boolean =
         suspendCancellableCoroutine { cont ->
 
             gatt = device.connectGatt(
@@ -280,47 +336,196 @@ class BleBluetoothManager(
                             Log.e("BLE", "Coroutine was cancelled: $cause")
                         }
                     }
+
+                    // 成功写入数据
+                    override fun onCharacteristicWrite(
+                        gatt: BluetoothGatt?,
+                        characteristic: BluetoothGattCharacteristic?,
+                        status: Int
+                    ) {
+                        synchronized(this) {
+                            isSending = false
+                            if (status == BluetoothGatt.GATT_SUCCESS) {
+                                // 写入成功，执行相关逻辑
+                                Log.d("BLE", "Write successful!")
+                            } else {
+                                // 写入失败，执行错误处理
+                                Log.e("BLE", "Write failed with status: $status")
+                            }
+                            // 处理下一个数据
+                            processNextData()
+                        }
+                    }
+
+                    override fun onCharacteristicChanged(
+                        gatt: BluetoothGatt,
+                        characteristic: BluetoothGattCharacteristic,
+                        value: ByteArray
+                    ) {
+                        super.onCharacteristicChanged(gatt, characteristic, value)
+                        // 处理接收到的数据
+                        Log.d("BLE", "Data received: ${value.contentToString()}")
+                        onDataReceived?.invoke(value)
+                        // 发送到 SharedFlow
+//                        kotlinx.coroutines.GlobalScope.launch {
+//                            _receivedData.emit(value)
+//                        }
+                    }
                 }
             )
         }
 
     @SuppressLint("MissingPermission")
-    fun disconnect() {
+    override fun disconnect() {
         gatt?.disconnect()
         gatt?.close()
         gatt = null
         writeChar = null
+        dataQueue.clear()
+        isSending = false
     }
 
     /** ================= 发送 ================= */
-
-    @SuppressLint("MissingPermission", "NewApi")
-    fun writeCharacteristicAsync(
-        characteristic: BluetoothGattCharacteristic,
-        data: ByteArray
-    ): Any {
-        val bluetoothGatt = gatt ?: run {
-            Log.e("BLE", "Gatt is null")
-            return false
+    @SuppressLint("MissingPermission")
+    override fun send(data: ByteArray): Int {
+        synchronized(dataQueue) {
+            val mtu = 20 // 典型的 BLE MTU 大小，实际值可能需要根据设备调整
+            
+            // 检查数据长度，如果不超过 MTU 限制，直接发送
+            if (data.size <= mtu) {
+                dataQueue.offer(data)
+            } else {
+                // 设计切片逻辑，确保每个切片包含尽可能多的完整 TLV blocks
+                if (data.isNotEmpty()) {
+                    val cmd = data[0] // 第一个字节是 CMD
+                    
+                    // 跳过 CMD，开始解析 TLV blocks
+                    var offset = 1
+                    while (offset < data.size) {
+                        // 尝试在一个切片中包含尽可能多的完整 TLV blocks
+                        var currentLength = 1 // 1 字节 CMD
+                        val chunkTLVData = mutableListOf<Byte>()
+                        
+                        // 循环添加 TLV blocks，直到达到 MTU 限制
+                        while (offset < data.size) {
+                            // 确保有足够的字节读取 TLV block 的头部
+                            if (offset + 2 <= data.size) {
+                                val paramId = data[offset]
+                                val length = data[offset + 1].toInt() and 0xFF
+                                
+                                // 计算这个 TLV block 的长度
+                                val tlvBlockLength = 2 + length // 2 字节头部 + length 字节值
+                                
+                                // 检查添加这个 TLV block 后是否会超过 MTU
+                                if (currentLength + tlvBlockLength <= mtu) {
+                                    // 添加这个 TLV block
+                                    chunkTLVData.add(paramId)
+                                    chunkTLVData.add(length.toByte())
+                                    // 添加 value 部分
+                                    for (i in 0 until length) {
+                                        if (offset + 2 + i < data.size) {
+                                            chunkTLVData.add(data[offset + 2 + i])
+                                        }
+                                    }
+                                    currentLength += tlvBlockLength
+                                    offset += tlvBlockLength
+                                } else {
+                                    // 超过 MTU 限制，停止添加
+                                    break
+                                }
+                            } else {
+                                // 数据不完整，停止添加
+                                break
+                            }
+                        }
+                        
+                        // 创建并发送这个切片
+                        if (chunkTLVData.isNotEmpty()) {
+                            val chunk = ByteArray(currentLength)
+                            chunk[0] = cmd // 设置 CMD
+                            // 复制 TLV blocks
+                            for (i in 0 until chunkTLVData.size) {
+                                chunk[i + 1] = chunkTLVData[i]
+                            }
+                            dataQueue.offer(chunk)
+                        } else {
+                            // 如果没有添加任何 TLV block，退出循环
+                            break
+                        }
+                    }
+                }
+            }
+            
+            processNextData()
+            return data.size
         }
-
-        return bluetoothGatt.writeCharacteristic(
-            characteristic,
-            data,
-            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        )
     }
 
-    // example
-//    fun writeTemp(value: Int) {
-//        val characteristic = BluetoothGattCharacteristic(
-//            TEMPERATURE.UUID,
-//            BluetoothGattCharacteristic.PROPERTY_WRITE,
-//            BluetoothGattCharacteristic.PERMISSION_WRITE
-//        )
-//
-//        characteristic.setValue(value)
-//
-//        writeCharacteristicAsync(characteristic)
-//    }
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun processNextData() {
+        synchronized(dataQueue) {
+            if (dataQueue.isNotEmpty() && !isSending) {
+                isSending = true
+                val data = dataQueue.poll()
+                data?.let {
+                    writeData(it)
+                }
+            }
+        }
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun writeData(data: ByteArray) {
+        val gatt = gatt ?: run {
+            synchronized(dataQueue) {
+                isSending = false
+            }
+            return
+        }
+        val char = writeChar ?: run {
+            synchronized(dataQueue) {
+                isSending = false
+            }
+            return
+        }
+
+        val success = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // 在 Android 13+ 中，writeCharacteristic 返回 int
+            val result = gatt.writeCharacteristic(
+                char,
+                data,
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            )
+            result == BluetoothGatt.GATT_SUCCESS
+        } else {
+            // 在 Android 12 及以下版本中，writeCharacteristic 返回 boolean
+            char.value = data
+            char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            gatt.writeCharacteristic(char)
+        }
+
+        if (!success) {
+            synchronized(dataQueue) {
+                isSending = false
+                processNextData()
+            }
+        }
+    }
+
+    override val receivedData: SharedFlow<ByteArray>
+        get() = _receivedData.asSharedFlow()
+
+
+    /** ================= 接收 ================= */
+    @SuppressLint("MissingPermission")
+    override fun listenForDataUpdates(onDataReceived: (ByteArray) -> Unit) {
+        gatt?.setCharacteristicNotification(writeChar, true)
+        writeChar?.let { characteristic ->
+            gatt?.setCharacteristicNotification(characteristic, true)
+
+            gatt?.readCharacteristic(characteristic)
+            // 回调数据通过 BluetoothGattCallback 中的 onCharacteristicChanged 来处理
+        }
+        this.onDataReceived = onDataReceived
+    }
 }
