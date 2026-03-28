@@ -37,15 +37,28 @@ class DualBluetoothViewModel(
     private val dataListeners =
         mutableSetOf<(ByteArray) -> Unit>()
 
-//    init {
-//        classic.onDataReceived = { data ->
-//            dataListeners.forEach { it(data) }
-//        }
-//
-//        ble.onDataReceived = { data ->
-//            dataListeners.forEach { it(data) }
-//        }
-//    }
+    init {
+        // classic.onDataReceived = { data ->
+        //     dataListeners.forEach { it(data) }
+        // }
+
+        // ble.onDataReceived = { data ->
+        //     dataListeners.forEach { it(data) }
+        // }
+
+        // 设置连接状态变化回调
+        classic.onConnectionStateChanged = { connected ->
+            if (!connected) {
+                _state.value = BluetoothState.Disconnected
+            }
+        }
+
+        ble.onConnectionStateChanged = { connected ->
+            if (!connected) {
+                _state.value = BluetoothState.Disconnected
+            }
+        }
+    }
 
     fun scanDevicesSafe() {
         _state.value = BluetoothState.Scanning

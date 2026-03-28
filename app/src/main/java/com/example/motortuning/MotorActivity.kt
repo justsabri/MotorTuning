@@ -20,6 +20,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -94,11 +96,54 @@ fun MotorControlContent(
             }
         }
 
+        // CAN ID 下拉框和更新按钮
+        val canIdList by viewModel.canIdList.collectAsState()
+        var selectedCanId by remember { mutableStateOf<Int?>(null) }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("CAN ID:", style = MaterialTheme.typography.bodyMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                var expanded by remember { mutableStateOf(false) }
+                Box(modifier = Modifier.width(100.dp)) {
+                    TextButton(
+                        onClick = { expanded = true }
+                    ) {
+                        Text(selectedCanId?.toString() ?: "选择 CAN ID")
+                    }
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false }
+                    ) {
+                        canIdList.forEach { canId ->
+                            DropdownMenuItem(
+                                text = { Text(canId.toString()) },
+                                onClick = {
+                                    selectedCanId = canId
+                                    viewModel.initCanId(canId)
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = { viewModel.updateCanIdList() }
+                ) {
+                    Text("更新")
+                }
+            }
+        }
+
         MotorAnglePreview(angle = uiState.previewAngle)
 
         // 只读参数显示
+        val displayParams by viewModel.displayParams.collectAsState()
         MotorInfoCard(
-            params = viewModel.buildDisplayParams(),
+            params = displayParams,
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -108,16 +153,16 @@ fun MotorControlContent(
         ) {
             MotorContinuousButton(
                 text = "◀ 反转",
-                onStep = { onIntent(MotorIntent.Step(-1)) },
-                onStart = { onIntent(MotorIntent.StartContinuous(-1)) },
-                onStop = { onIntent(MotorIntent.StopContinuous) }
+                onStep = { onIntent(MotorIntent.Step(selectedCanId, -1)) },
+                onStart = { onIntent(MotorIntent.StartContinuous(selectedCanId, -1)) },
+                onStop = { onIntent(MotorIntent.StopContinuous(selectedCanId)) }
             )
 
             MotorContinuousButton(
                 text = "正转 ▶",
-                onStep = { onIntent(MotorIntent.Step(1)) },
-                onStart = { onIntent(MotorIntent.StartContinuous(1)) },
-                onStop = { onIntent(MotorIntent.StopContinuous) }
+                onStep = { onIntent(MotorIntent.Step(selectedCanId, 1)) },
+                onStart = { onIntent(MotorIntent.StartContinuous(selectedCanId, 1)) },
+                onStop = { onIntent(MotorIntent.StopContinuous(selectedCanId)) }
             )
         }
 
@@ -130,11 +175,16 @@ fun MotorControlContent(
         }
 
         if (showSettings) {
+            // 将 uiParams 从 Map<String, Any> 转换为 Map<String, String>
+            val stringValues = uiParams.mapValues { it.value.toString() }
             MotorSettingsDialog(
                 paramDef = initParamKeys,
-                initialValues = uiParams,
+                initialValues = stringValues,
+                selectedCanId = selectedCanId,
                 onSave = { newParams ->
-                    viewModel.saveParams(newParams)
+                    // 将 newParams 从 Map<String, Float> 转换为 Map<String, Any>
+                    val anyValues = newParams.mapValues { it.value as Any }
+                    viewModel.saveParams(anyValues)
                     showSettings = false  // 关闭 Dialog
                 },
                 onDismiss = { showSettings = false }
@@ -230,16 +280,17 @@ fun MotorAnglePreview(
 @Composable
 fun MotorSettingsDialog(
     paramDef: List<MotorParam>,
-    initialValues: Map<String, Int>,
+    initialValues: Map<String, String>,
+    selectedCanId: Int?,
     onDismiss: () -> Unit,
-    onSave: (Map<String, Int>) -> Unit
+    onSave: (Map<String, Float>) -> Unit
 ) {
     // 本地可编辑状态（String，便于输入）
     val values = remember {
         mutableStateMapOf<String, String>().apply {
             paramDef.forEach { def ->
                 this[def.key] =
-                    initialValues[def.key]?.toString()
+                    initialValues[def.key]
                         ?: def.default.toString()
             }
         }
@@ -259,8 +310,8 @@ fun MotorSettingsDialog(
                         OutlinedTextField(
                             value = values[def.key] ?: "",
                             onValueChange = { new ->
-                                // 只允许数字
-                                if (new.isEmpty() || new.all { it.isDigit() }) {
+                                // 允许空，或者匹配数字+可选小数点
+                                if (new.isEmpty() || new.matches(Regex("^\\d*\\.?\\d*\$"))) {
                                     values[def.key] = new
                                 }
                             },
@@ -268,7 +319,7 @@ fun MotorSettingsDialog(
                             suffix = { Text(def.unit) },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Number
+                                keyboardType = KeyboardType.Decimal
                             )
                         )
                     }
@@ -278,8 +329,8 @@ fun MotorSettingsDialog(
             TextButton(
                 onClick = {
                     val result = values.mapValues {
-                        it.value.toIntOrNull() ?: 0
-                    }
+                        it.value.toFloatOrNull() ?: 0f
+                    } + ("current_can_id" to (selectedCanId?.toFloat() ?: 1f))
                     onSave(result)
                 }
             ) {

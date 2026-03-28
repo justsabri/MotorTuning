@@ -17,6 +17,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.annotation.RequiresPermission
 import kotlinx.coroutines.Dispatchers
@@ -86,6 +88,7 @@ abstract class BaseBluetoothManager {
     abstract val receivedData: SharedFlow<ByteArray>
 
     var onDataReceived: ((ByteArray) -> Unit)? = null
+    var onConnectionStateChanged: ((Boolean) -> Unit)? = null
 }
 
 class ClassicBluetoothManager(
@@ -167,7 +170,7 @@ class ClassicBluetoothManager(
 
     /** ================= 连接 ================= */
 
-    override suspend fun connect(device: BluetoothDevice): Boolean =
+    override suspend fun connect(device: BluetoothDevice): Boolean = 
         withContext(Dispatchers.IO) {
             try {
                 stopScan()
@@ -179,10 +182,12 @@ class ClassicBluetoothManager(
                 socket = tmp
                 input = tmp.inputStream
                 output = tmp.outputStream
+                onConnectionStateChanged?.invoke(true)
                 true
             } catch (e: Exception) {
                 e.printStackTrace()
                 disconnect()
+                onConnectionStateChanged?.invoke(false)
                 false
             }
         }
@@ -197,6 +202,7 @@ class ClassicBluetoothManager(
         input = null
         output = null
         socket = null
+        onConnectionStateChanged?.invoke(false)
     }
 
     /** ================= 发送 ================= */
@@ -248,11 +254,16 @@ class BleBluetoothManager(
 
     /** 根据 ESP32 固件改 */
     private val serviceUUID =
-        UUID.fromString("0000FFE0-0000-1000-8000-00805F9B34FB")
-    private val charUUID =
-        UUID.fromString("0000FFE1-0000-1000-8000-00805F9B34FB")
+        UUID.fromString("4fafc201-1fb5-459e-8fcc-c5c9c331914b")
+    private val writeCharUUID =
+        UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a8")
 
     private var writeChar: BluetoothGattCharacteristic? = null
+
+    private val readCharUUID =
+        UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a9")
+
+    private var readChar: BluetoothGattCharacteristic? = null
     
     // 发送队列，避免数据丢失
     private val dataQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
@@ -281,12 +292,17 @@ class BleBluetoothManager(
     }
 
     private var onDeviceFound: ((BluetoothDevice) -> Unit)? = null
+    val SCAN_PERIOD: Long = 10000 // 10 秒
+    val handler = Handler(Looper.getMainLooper())
 
     @SuppressLint("MissingPermission")
     override fun startScan(onDeviceFound: (BluetoothDevice) -> Unit) {
         Log.d("BLE", "Start scanning...")
         this@BleBluetoothManager.onDeviceFound = onDeviceFound
         scanner.startScan(scanCallback)
+        handler.postDelayed({
+            scanner.stopScan(scanCallback)
+        }, SCAN_PERIOD)
     }
 
     @SuppressLint("MissingPermission")
@@ -300,7 +316,8 @@ class BleBluetoothManager(
     @SuppressLint("MissingPermission")
     override suspend fun connect(device: BluetoothDevice): Boolean =
         suspendCancellableCoroutine { cont ->
-
+            Log.d("BLE", "Connecting to ${device.address}")
+            scanner.stopScan(scanCallback)
             gatt = device.connectGatt(
                 context,
                 false,
@@ -311,14 +328,18 @@ class BleBluetoothManager(
                         status: Int,
                         newState: Int
                     ) {
+                        Log.d("BLE", "Connection state changed: $status to $newState")
+
                         if (newState == BluetoothProfile.STATE_CONNECTED) {
                             gatt.discoverServices()
+                            onConnectionStateChanged?.invoke(true)
                         } else {
                             // 取消时的处理逻辑，optional
                             cont.resume(false) { cause, _, _ -> // 取消时的处理逻辑，optional
                                 // 取消时的处理逻辑，optional
                                 Log.e("BLE", "Coroutine was cancelled: $cause")
                             }
+                            onConnectionStateChanged?.invoke(false)
                         }
                     }
 
@@ -326,12 +347,15 @@ class BleBluetoothManager(
                         gatt: BluetoothGatt,
                         status: Int
                     ) {
+                        Log.d("BLE", "Services discovered!")
                         val service = gatt.getService(serviceUUID)
                         writeChar =
-                            service?.getCharacteristic(charUUID)
+                            service?.getCharacteristic(writeCharUUID)
+                        readChar =
+                            service?.getCharacteristic(readCharUUID)
 
                         // 取消时的处理逻辑，optional
-                        cont.resume(writeChar != null) { cause, _, _ -> // 取消时的处理逻辑，optional
+                        cont.resume(writeChar != null && readChar != null) { cause, _, _ -> // 取消时的处理逻辑，optional
                             // 取消时的处理逻辑，optional
                             Log.e("BLE", "Coroutine was cancelled: $cause")
                         }
@@ -381,6 +405,7 @@ class BleBluetoothManager(
         gatt?.close()
         gatt = null
         writeChar = null
+        readChar = null
         dataQueue.clear()
         isSending = false
     }
@@ -519,8 +544,8 @@ class BleBluetoothManager(
     /** ================= 接收 ================= */
     @SuppressLint("MissingPermission")
     override fun listenForDataUpdates(onDataReceived: (ByteArray) -> Unit) {
-        gatt?.setCharacteristicNotification(writeChar, true)
-        writeChar?.let { characteristic ->
+        gatt?.setCharacteristicNotification(readChar, true)
+        readChar?.let { characteristic ->
             gatt?.setCharacteristicNotification(characteristic, true)
 
             gatt?.readCharacteristic(characteristic)
