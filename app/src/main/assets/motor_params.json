@@ -7,11 +7,11 @@
       "default": 1,
       "unit": " ",
       "visible": true,
-      "editable": true,
+      "editable": false,
       "min": 1,
       "max": 4,
       "paramId": "0x01",
-      "length": 1,
+      "length": 4,
       "resolution": 1,
       "type": "INT"
     },
@@ -30,9 +30,9 @@
       "type": "FLOAT"
     },
     {
-      "key": "min_pos",
-      "name": "最小位置",
-      "default": -2,
+      "key": "max_pos",
+      "name": "最大位置",
+      "default": 114,
       "unit": "°",
       "visible": true,
       "editable": true,
@@ -44,9 +44,9 @@
       "type": "FLOAT"
     },
     {
-      "key": "max_pos",
-      "name": "最大位置",
-      "default": 114,
+      "key": "min_pos",
+      "name": "最小位置",
+      "default": -2,
       "unit": "°",
       "visible": true,
       "editable": true,
@@ -74,7 +74,7 @@
     {
       "key": "min_reverse_speed",
       "name": "最大负向速度",
-      "default": 120,
+      "default": -120,
       "unit": "°/s",
       "visible": true,
       "editable": true,
@@ -91,7 +91,7 @@
       "default": 0,
       "unit": "V",
       "visible": true,
-      "editable": true,
+      "editable": false,
       "min": 0,
       "max": 4,
       "paramId": "0x07",
@@ -110,6 +110,20 @@
       "max": 4,
       "paramId": "0x08",
       "length": 1,
+      "resolution": 1,
+      "type": "INT"
+    },
+    {
+      "key": "encoder_position",
+      "name": "编码器绝对位置",
+      "default": 1,
+      "unit": " ",
+      "visible": true,
+      "editable": false,
+      "min": 1,
+      "max": 4,
+      "paramId": "0x09",
+      "length": 4,
       "resolution": 1,
       "type": "INT"
     }

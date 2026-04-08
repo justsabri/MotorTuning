@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothSocket
@@ -335,11 +336,11 @@ class BleBluetoothManager(
                             onConnectionStateChanged?.invoke(true)
                         } else {
                             // 取消时的处理逻辑，optional
-                            cont.resume(false) { cause, _, _ -> // 取消时的处理逻辑，optional
-                                // 取消时的处理逻辑，optional
-                                Log.e("BLE", "Coroutine was cancelled: $cause")
-                            }
                             onConnectionStateChanged?.invoke(false)
+//                            cont.resume(false) { cause, _, _ -> // 取消时的处理逻辑，optional
+//                                // 取消时的处理逻辑，optional
+//                                Log.e("BLE", "Coroutine was cancelled: $cause")
+//                            }
                         }
                     }
 
@@ -389,11 +390,23 @@ class BleBluetoothManager(
                         super.onCharacteristicChanged(gatt, characteristic, value)
                         // 处理接收到的数据
                         Log.d("BLE", "Data received: ${value.contentToString()}")
+                        Log.d("BLE", "Data received cb: ${onDataReceived}")
                         onDataReceived?.invoke(value)
                         // 发送到 SharedFlow
 //                        kotlinx.coroutines.GlobalScope.launch {
 //                            _receivedData.emit(value)
 //                        }
+                    }
+
+                    override fun onDescriptorWrite(
+                        gatt: BluetoothGatt?,
+                        descriptor: BluetoothGattDescriptor?,
+                        status: Int
+                    ) {
+                        super.onDescriptorWrite(gatt, descriptor, status)
+                        if (status == BluetoothGatt.GATT_SUCCESS) {
+                            Log.d("BLE", "通知订阅成功")
+                        }
                     }
                 }
             )
@@ -423,12 +436,13 @@ class BleBluetoothManager(
                 // 设计切片逻辑，确保每个切片包含尽可能多的完整 TLV blocks
                 if (data.isNotEmpty()) {
                     val cmd = data[0] // 第一个字节是 CMD
-                    
-                    // 跳过 CMD，开始解析 TLV blocks
-                    var offset = 1
+                    val can_id = data[1] // 第二个字节是can_id
+
+                    // 跳过 CMD和can_id，开始解析 TLV blocks
+                    var offset = 2
                     while (offset < data.size) {
                         // 尝试在一个切片中包含尽可能多的完整 TLV blocks
-                        var currentLength = 1 // 1 字节 CMD
+                        var currentLength = 2 // 1 字节 CMD + 1字节 can_id
                         val chunkTLVData = mutableListOf<Byte>()
                         
                         // 循环添加 TLV blocks，直到达到 MTU 限制
@@ -468,10 +482,12 @@ class BleBluetoothManager(
                         if (chunkTLVData.isNotEmpty()) {
                             val chunk = ByteArray(currentLength)
                             chunk[0] = cmd // 设置 CMD
+                            chunk[1] = can_id // 设置 can_id
                             // 复制 TLV blocks
                             for (i in 0 until chunkTLVData.size) {
-                                chunk[i + 1] = chunkTLVData[i]
+                                chunk[i + 2] = chunkTLVData[i]
                             }
+                            Log.i("MotorViewModel", "chunk: ${chunk.toHexString()}")
                             dataQueue.offer(chunk)
                         } else {
                             // 如果没有添加任何 TLV block，退出循环
@@ -492,6 +508,7 @@ class BleBluetoothManager(
             if (dataQueue.isNotEmpty() && !isSending) {
                 isSending = true
                 val data = dataQueue.poll()
+                Log.i("MotorViewModel", "processNextData: ${data?.toHexString()}")
                 data?.let {
                     writeData(it)
                 }
@@ -544,13 +561,28 @@ class BleBluetoothManager(
     /** ================= 接收 ================= */
     @SuppressLint("MissingPermission")
     override fun listenForDataUpdates(onDataReceived: (ByteArray) -> Unit) {
-        gatt?.setCharacteristicNotification(readChar, true)
-        readChar?.let { characteristic ->
-            gatt?.setCharacteristicNotification(characteristic, true)
+//        gatt?.setCharacteristicNotification(readChar, true)
+//        readChar?.let { characteristic ->
+//            gatt?.setCharacteristicNotification(characteristic, true)
+//
+//            gatt?.readCharacteristic(characteristic)
+//            // 回调数据通过 BluetoothGattCallback 中的 onCharacteristicChanged 来处理
+//        }
 
-            gatt?.readCharacteristic(characteristic)
-            // 回调数据通过 BluetoothGattCallback 中的 onCharacteristicChanged 来处理
-        }
+        val characteristic = readChar ?: return
+        val gatt = gatt ?: return
+
+        // 1. 本地开启通知
+        gatt.setCharacteristicNotification(characteristic, true)
+
+        // 2. 写CCCD
+        val descriptor = characteristic.getDescriptor(
+            UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        )
+
+        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        gatt.writeDescriptor(descriptor)
+
         this.onDataReceived = onDataReceived
     }
 }

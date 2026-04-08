@@ -95,7 +95,8 @@ class MotorViewModel(
                         }
                         DisplayParam(
                             name = param.name,
-                            value = displayValue
+                            value = displayValue,
+                            unit = param.unit
                         )
                     }
             }.collect {
@@ -104,6 +105,7 @@ class MotorViewModel(
         }
 
         removeListener = comm.listenForDataUpdates { data ->
+            Log.i("MotorViewModel", "Received data: ${data.joinToString(" ") { "%02X".format(it) }}")
             processBluetoothData(data)
         }
 
@@ -252,13 +254,14 @@ class MotorViewModel(
         dataList.add(type.type)
         // 添加can_id
         val canId = (params["current_can_id"] as? Float)?.toInt() ?: -1
-        Log.i("MotorViewModel", "canId: $canId")
+        val cancanid =
+        Log.i("MotorViewModel", "canId: $canId, cur: $params")
         dataList.add((canId and 0xFF).toByte())
         
         // 添加 TLV blocks
         params.forEach { (key, value) ->
             // 从 _paramDef 中查找对应的 MotorParam 对象
-            val motorParam = _paramDef.value.filter { it.editable }.find { it.key == key }
+            val motorParam = _paramDef.value.find { it.key == key && it.key != "current_can_id" }
             if (motorParam != null) {
                 // 解析 paramId 字符串（十六进制值，例如 "0x01"）
                 val paramId = motorParam.paramId.let {
@@ -277,37 +280,48 @@ class MotorViewModel(
                 dataList.add(length.toByte())
                 
                 // 使用参数类型处理器获取整数表示
-                val handler = ParamTypeHandlerFactory.getHandler(motorParam.type)
-                val intValue = handler.valueToInt(value, motorParam.resolution)
-                
+//                val handler = ParamTypeHandlerFactory.getHandler(motorParam.type)
+//                val intValue = handler.valueToInt(value, motorParam.resolution)
+                Log.i("MotorViewModel", "value.type: $value : ${value::class}")
+                val realValue = when(motorParam.type) {
+                    ParamDataType.INT -> (value as? Float)?.toInt() ?: 0
+                    ParamDataType.FLOAT -> {
+                        // 先将 Float 转为 Int 的比特表示
+                        value as Float
+                        val intBits = java.lang.Float.floatToIntBits(value) // 获取 Float 的整数位表示
+                        intBits
+                    }
+                    ParamDataType.BOOLEAN -> if (value as Boolean) 1 else 0
+                    else -> 0 // 默认值，如果没有匹配的类型
+                }
                 when (length) {
-                    1 -> dataList.add((intValue and 0xFF).toByte())
+                    1 -> dataList.add((realValue and 0xFF).toByte())
                     2 -> {
-                        dataList.add((intValue and 0xFF).toByte())
-                        dataList.add((intValue shr 8 and 0xFF).toByte())
+                        dataList.add((realValue and 0xFF).toByte())
+                        dataList.add((realValue shr 8 and 0xFF).toByte())
                     }
                     4 -> {
-                        dataList.add((intValue and 0xFF).toByte())
-                        dataList.add((intValue shr 8 and 0xFF).toByte())
-                        dataList.add((intValue shr 16 and 0xFF).toByte())
-                        dataList.add((intValue shr 24 and 0xFF).toByte())
+                        dataList.add((realValue and 0xFF).toByte())
+                        dataList.add((realValue shr 8 and 0xFF).toByte())
+                        dataList.add((realValue shr 16 and 0xFF).toByte())
+                        dataList.add((realValue shr 24 and 0xFF).toByte())
                     }
                     8 -> {
                         // 发送 8 字节长度的值（小端序）
-                        dataList.add((intValue and 0xFF).toByte())
-                        dataList.add((intValue shr 8 and 0xFF).toByte())
-                        dataList.add((intValue shr 16 and 0xFF).toByte())
-                        dataList.add((intValue shr 24 and 0xFF).toByte())
-                        dataList.add((intValue shr 32 and 0xFF).toByte())
-                        dataList.add((intValue shr 40 and 0xFF).toByte())
-                        dataList.add((intValue shr 48 and 0xFF).toByte())
-                        dataList.add((intValue shr 56 and 0xFF).toByte())
+                        dataList.add((realValue and 0xFF).toByte())
+                        dataList.add((realValue shr 8 and 0xFF).toByte())
+                        dataList.add((realValue shr 16 and 0xFF).toByte())
+                        dataList.add((realValue shr 24 and 0xFF).toByte())
+                        dataList.add((realValue shr 32 and 0xFF).toByte())
+                        dataList.add((realValue shr 40 and 0xFF).toByte())
+                        dataList.add((realValue shr 48 and 0xFF).toByte())
+                        dataList.add((realValue shr 56 and 0xFF).toByte())
                     }
                     // 其他长度可以根据需要添加
                 }
             }
         }
-        
+        Log.i("MotorViewModel", "dataList: ${dataList.toByteArray().toHexString()}")
         return dataList.toByteArray()
     }
 
@@ -326,6 +340,7 @@ class MotorViewModel(
     }
     /** 处理接收到的蓝牙数据 */
     fun processBluetoothData(data: ByteArray) {
+        Log.i("MotorViewModel", "processBluetoothData ${data.toHexString()}")
         // 处理接收到的蓝牙数据，按照 TLV 协议解析
         if (data.isNotEmpty()) {
             val cmd = data[0] // 第一个字节是 CMD
@@ -378,7 +393,7 @@ class MotorViewModel(
                         }
                         
                         // 使用参数类型处理器转换值
-                        val typedValue: Any = if (motorParam != null) {
+                        val typedValue: Any = if (motorParam != null && motorParam.length == length) {
                             val handler = ParamTypeHandlerFactory.getHandler(motorParam.type)
                             handler.intToValue(value, motorParam.resolution)
                         } else {
@@ -478,7 +493,7 @@ class MotorViewModel(
         lastUpdateTime = System.currentTimeMillis() // 更新最后更新时间
         _uiState.value = _uiState.value.copy(
             position = newPos,
-            previewAngle = newPos,
+            previewAngle = if (_uiState.value.previewChange) _uiState.value.previewAngle else newPos,
             connect = true // 置为已连接
         )
     }
@@ -501,7 +516,8 @@ class MotorViewModel(
                 Log.i("MotorViewModel", "Display param ${param.key}, ${value}, ${param.type}: ${param.name} = $displayValue")
                 DisplayParam(
                     name = param.name,
-                    value = displayValue
+                    value = displayValue,
+                    unit = param.unit
                 )
             }
     }
@@ -509,27 +525,39 @@ class MotorViewModel(
     /** ================= Intent 处理 ================= */
 
     fun handleIntent(intent: MotorIntent) {
+        Log.i("MotorViewModel", "handleIntent $intent")
         when (intent) {
             is MotorIntent.Step -> {
+                Log.i("MotorViewModel", "Step ${intent.delta}")
                 _uiState.value =
                     _uiState.value.copy(position = _uiState.value.position + intent.delta)
                 sendPosition(intent.can_id, _uiState.value.position)
+                if (_uiState.value.previewChange)
+                    _uiState.value = _uiState.value.copy(previewChange = false)
             }
             is MotorIntent.StartContinuous -> {
-                _uiState.value = _uiState.value.copy(previewAngle = intent.direction * 30)
+                Log.i("MotorViewModel", "StartContinuous ${intent.direction}")
+                if (!_uiState.value.previewChange)
+                    _uiState.value = _uiState.value.copy(previewChange = true)
+                _uiState.value = _uiState.value.copy(previewAngle = intent.direction + _uiState.value.previewAngle)
             }
             is MotorIntent.StopContinuous -> {
-                _uiState.value = _uiState.value.copy(previewAngle = 0)
+                Log.i("MotorViewModel", "StopContinuous ${_uiState.value.previewAngle}")
+//                _uiState.value = _uiState.value.copy(previewAngle = 0)
+                sendPosition(intent.can_id, _uiState.value.previewAngle)
+                if (_uiState.value.previewChange)
+                    _uiState.value = _uiState.value.copy(previewChange = false)
             }
             else -> Unit
         }
     }
 
     fun sendPosition(can_id: Int?, position: Int) {
+        Log.i("MotorViewModel", "sendPosition $can_id, $position")
         if (_params.value.contains("position")) {
             val positionMap = mutableMapOf<String, Any>()
-            positionMap["current_can_id"] = can_id as Any
-            positionMap["position"] = position
+            positionMap["current_can_id"] = can_id?.toFloat() as Any
+            positionMap["position"] = position?.toFloat() as Any
             sendParams(ParamType.SET, positionMap)
         }
     }
@@ -576,6 +604,23 @@ class MotorViewModel(
         }
 
         getParams(ParamType.GET_CONTINUOUS, can_id, dataList)
+
+        updateRealtimeValue("can_id", can_id)
+    }
+
+    fun setZero(can_id: Int?) {
+        val encoder_position = (_realtimeValues.value["encoder_position"] as Int) + (_realtimeValues.value["position"] as Float) * 121 *65535 / 360
+        val zeroMap = mutableMapOf<String, Any>()
+        zeroMap["current_can_id"] = can_id?.toFloat() as Any
+        zeroMap["encoder_position"] = encoder_position?.toFloat() as Any
+        sendParams(ParamType.SET, zeroMap)
+    }
+
+    fun setCanId(dst_canId: Int, can_id: Int?) {
+        val canIdMap = mutableMapOf<String, Any>()
+        canIdMap["current_can_id"] = can_id?.toFloat() as Any
+        canIdMap["can_id"] = dst_canId?.toFloat() as Any
+        sendParams(ParamType.SET, canIdMap)
     }
 }
 

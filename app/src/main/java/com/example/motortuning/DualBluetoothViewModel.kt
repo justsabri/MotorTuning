@@ -1,6 +1,7 @@
 package com.example.motortuning
 
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -97,6 +98,7 @@ class DualBluetoothViewModel(
                 activeManager =
                     if (device is BtDevice.Classic) classic else ble
                 activeManager?.listenForDataUpdates { data ->
+                    Log.i("DualBluetoothViewModel", "listenForDataUpdates execute ${dataListeners}")
                     dataListeners.forEach { it(data) }
                 }
             } else {
@@ -124,6 +126,7 @@ class DualBluetoothViewModel(
     override fun listenForDataUpdates(
         onDataReceived: (ByteArray) -> Unit
     ):() -> Unit {
+        Log.i("DualBluetoothViewModel", "listenForDataUpdates")
         dataListeners += onDataReceived
         return {
             dataListeners -= onDataReceived

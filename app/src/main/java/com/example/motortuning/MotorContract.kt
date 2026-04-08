@@ -22,7 +22,8 @@ data class MotorUiState(
     val position: Int = 0,
     val connect: Boolean = false,
     val error: String? = null,
-    val previewAngle: Int = 0 // 用于显示预计角度（动画）
+    val previewAngle: Int = 0, // 用于显示预计角度（动画）
+    val previewChange: Boolean = false
 )
 
 // 电机操作意图
@@ -37,7 +38,8 @@ sealed interface MotorIntent {
 
 data class DisplayParam(
     val name: String,
-    val value: String
+    val value: String,
+    val unit: String
 )
 
 // 参数类型处理器接口（整合了原有的 ParamTypeHandler 和 ParamTypeStorageHandler）
@@ -150,7 +152,7 @@ class FloatParamTypeHandler : ParamTypeHandler {
     }
 
     override fun intToValue(intValue: Int, resolution: Float): Any {
-        return intValue * resolution
+        return Float.fromBits(intValue)
     }
 
     override fun formatValue(value: Any, resolution: Float): String {

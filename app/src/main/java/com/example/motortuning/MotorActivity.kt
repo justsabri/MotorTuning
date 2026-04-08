@@ -2,8 +2,11 @@ package com.example.motortuning
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +18,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -35,11 +41,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun MotorControlScreen(
@@ -63,10 +73,12 @@ fun MotorControlContent(
     val realtimeValues by viewModel.realtimeValues.collectAsState()
     val onIntent = viewModel::handleIntent
     var showSettings by remember { mutableStateOf(false) }
+    var showCanIdDialog by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
 
@@ -154,15 +166,21 @@ fun MotorControlContent(
             MotorContinuousButton(
                 text = "◀ 反转",
                 onStep = { onIntent(MotorIntent.Step(selectedCanId, -1)) },
-                onStart = { onIntent(MotorIntent.StartContinuous(selectedCanId, -1)) },
-                onStop = { onIntent(MotorIntent.StopContinuous(selectedCanId)) }
+                onLongPress = {
+                    // 长按时，计算旋转角度并累计
+                    onIntent(MotorIntent.StartContinuous(selectedCanId, -1))
+                },
+                onLongPressEnd = { onIntent(MotorIntent.StopContinuous(selectedCanId)) }
             )
 
             MotorContinuousButton(
                 text = "正转 ▶",
                 onStep = { onIntent(MotorIntent.Step(selectedCanId, 1)) },
-                onStart = { onIntent(MotorIntent.StartContinuous(selectedCanId, 1)) },
-                onStop = { onIntent(MotorIntent.StopContinuous(selectedCanId)) }
+                onLongPress = {
+                    // 长按时，计算旋转角度并累计
+                    onIntent(MotorIntent.StartContinuous(selectedCanId, 1))
+                },
+                onLongPressEnd = { onIntent(MotorIntent.StopContinuous(selectedCanId)) }
             )
         }
 
@@ -172,6 +190,25 @@ fun MotorControlContent(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("设置参数")
+        }
+
+        // 新增“设置can_id”按钮
+        Button(
+            onClick = { showCanIdDialog = true },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("设置can_id")
+        }
+
+        // 新增“设置当前位置为零点”按钮
+        Button(
+            onClick = {
+                val current_canId = selectedCanId
+                viewModel.setZero(current_canId)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("设置当前位置为零点")
         }
 
         if (showSettings) {
@@ -190,6 +227,51 @@ fun MotorControlContent(
                 onDismiss = { showSettings = false }
             )
         }
+
+        if (showCanIdDialog) {
+            var canIdText by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { showCanIdDialog = false },
+                title = { Text("设置 CAN ID") },
+                text = {
+                    Column {
+                        Text("请输入 CAN ID (1-4):")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = canIdText,
+                            onValueChange = { canIdText = it },
+                            label = { Text("CAN ID") },
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number
+                            )
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val canId = canIdText.toIntOrNull()
+                            val current_canId = selectedCanId
+                            if (canId != null && canId in 1..4) {
+                                viewModel.setCanId(canId, current_canId)
+                                showCanIdDialog = false
+                            }
+                        }
+                    ) {
+                        Text("设置")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showCanIdDialog = false
+                        }
+                    ) {
+                        Text("取消")
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -198,28 +280,71 @@ fun MotorControlContent(
 fun MotorContinuousButton(
     text: String,
     onStep: () -> Unit,
-    onStart: () -> Unit,
-    onStop: () -> Unit
+    onLongPress: () -> Unit, // 长按时传递累计的角度
+    onLongPressEnd: () -> Unit // 长按结束时调用
 ) {
-    Button(
+//    Button(
+//        modifier = Modifier
+//            .width(140.dp)
+//            .height(70.dp)
+//            .pointerInput(Unit) {
+//                detectTapGestures(
+//                    onTap = { onStep() }, // 短按
+//                    onPress = { // 长按
+//                        val startTime = System.currentTimeMillis()
+//                        // 等待松手事件
+//                        tryAwaitRelease()
+//                        val endTime = System.currentTimeMillis()
+//                        val duration = endTime - startTime
+//                        // 计算角度：1度/100毫秒
+//                        val angle = (duration / 100).toInt()
+//                        onLongPress(angle)
+//                    }
+//                )
+//            },
+//        onClick = { Log.i("MotorContinuousButton", "点击了 $text") }
+//    ) {
+//        Text(text)
+//    }
+
+    val interactionSource = remember { MutableInteractionSource() }
+    Box(
         modifier = Modifier
             .width(140.dp)
             .height(70.dp)
             .pointerInput(Unit) {
                 detectTapGestures(
-                    onTap = { onStep() }, // 短按
-                    onPress = { // 长按
-                        // 在此处启动长按时的处理
-                        onStart()
-                        // 等待松手事件
-                        tryAwaitRelease()
-                        onStop() // 松手后停止
+                    onTap = {
+                        null //onStep()  // 短按事件
+                    },
+                    onPress = {
+                        coroutineScope {
+                            val startTime = System.currentTimeMillis()
+                            val job = launch {
+                                while (true) {
+                                    onLongPress()
+                                    delay(100)
+                                }
+                            }
+
+                            tryAwaitRelease()  // 等待手指抬起
+                            job.cancel()
+                            val duration = System.currentTimeMillis() - startTime
+                            job.cancel()
+                            if (duration < 300) onStep() // 短按
+                            else onLongPressEnd() // 长按抬起
+                        }
                     }
                 )
-            },
-        onClick = { /* 短按逻辑，已由 detectTapGestures 处理 */ }
+            }
+            .clip(RoundedCornerShape(16.dp))  // 设置圆角矩形，角度为16dp
+            .background(MaterialTheme.colorScheme.primary)
+            .indication(
+                interactionSource = interactionSource,
+                indication = LocalIndication.current
+            )
     ) {
-        Text(text)
+        Text(text, modifier = Modifier.align(Alignment.Center))  // 按钮文本居中显示
     }
 }
 
@@ -237,7 +362,7 @@ fun MotorInfoCard(
             Spacer(Modifier.height(8.dp))
 
             params.forEach {
-                Text("${it.name}：${it.value}")
+                Text("${it.name}：${it.value} ${it.unit}")
             }
         }
     }
@@ -311,7 +436,7 @@ fun MotorSettingsDialog(
                             value = values[def.key] ?: "",
                             onValueChange = { new ->
                                 // 允许空，或者匹配数字+可选小数点
-                                if (new.isEmpty() || new.matches(Regex("^\\d*\\.?\\d*\$"))) {
+                                if (new.isEmpty() || new.matches(Regex("^-?\\d*\\.?\\d*\$"))) {
                                     values[def.key] = new
                                 }
                             },
@@ -330,7 +455,7 @@ fun MotorSettingsDialog(
                 onClick = {
                     val result = values.mapValues {
                         it.value.toFloatOrNull() ?: 0f
-                    } + ("current_can_id" to (selectedCanId?.toFloat() ?: 1f))
+                    } + ("current_can_id" to (selectedCanId?.toFloat() ?: -1f))
                     onSave(result)
                 }
             ) {
