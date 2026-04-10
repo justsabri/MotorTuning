@@ -489,6 +489,7 @@ class MotorViewModel(
 
     /** 蓝牙收到实时值 **/
     fun updateRealtimePosition(pos: Int?) {
+        Log.i("MotorViewModel", "updateRealtimePosition $pos")
         val newPos = pos ?: _uiState.value.position
         lastUpdateTime = System.currentTimeMillis() // 更新最后更新时间
         _uiState.value = _uiState.value.copy(
@@ -609,6 +610,7 @@ class MotorViewModel(
     }
 
     fun setZero(can_id: Int?) {
+        Log.i("MotorViewModel", "setZero encoder_position ${_realtimeValues.value["encoder_position"]} position ${_realtimeValues.value["position"]}")
         val encoder_position = (_realtimeValues.value["encoder_position"] as Int) + (_realtimeValues.value["position"] as Float) * 121 *65535 / 360
         val zeroMap = mutableMapOf<String, Any>()
         zeroMap["current_can_id"] = can_id?.toFloat() as Any

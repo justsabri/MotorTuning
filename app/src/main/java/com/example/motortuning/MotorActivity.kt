@@ -413,7 +413,7 @@ fun MotorSettingsDialog(
     // 本地可编辑状态（String，便于输入）
     val values = remember {
         mutableStateMapOf<String, String>().apply {
-            paramDef.forEach { def ->
+            paramDef.filter { it.editable }.forEach { def ->
                 this[def.key] =
                     initialValues[def.key]
                         ?: def.default.toString()
